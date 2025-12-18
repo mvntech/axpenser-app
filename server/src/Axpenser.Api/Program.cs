@@ -4,6 +4,7 @@ using Axpenser.Infrastructure.Auth;
 using Axpenser.Infrastructure.Identity;
 using Axpenser.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -31,6 +32,18 @@ builder.Services.AddIdentity<AppUser, IdentityRole<Guid>>(opt =>
 .AddEntityFrameworkStores<AppDbContext>()
 .AddDefaultTokenProviders();
 
+builder.Services.ConfigureApplicationCookie(options =>
+{
+    options.Cookie.SameSite = SameSiteMode.None;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+});
+
+builder.Services.Configure<CookieAuthenticationOptions>(IdentityConstants.ExternalScheme, options =>
+{
+    options.Cookie.SameSite = SameSiteMode.None;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+});
+
 // JWT options + token service
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection("Jwt"));
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
@@ -45,6 +58,7 @@ builder.Services
     {
         options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
         options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultSignInScheme = IdentityConstants.ExternalScheme;
     })
     .AddJwtBearer(options =>
     {
@@ -78,6 +92,15 @@ builder.Services
         options.ClientSecret = builder.Configuration["OAuth:Google:ClientSecret"]!;
         options.SaveTokens = true;
         options.CallbackPath = "/api/auth/external/google/callback";
+        options.CorrelationCookie.SameSite = SameSiteMode.None;
+        options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
+
+        options.Events.OnRemoteFailure = context =>
+        {
+            context.Response.Redirect("/api/auth/external/error?reason=" + System.Net.WebUtility.UrlEncode(context.Failure?.Message ?? "google_remote_failure"));
+            context.HandleResponse();
+            return Task.CompletedTask;
+        };
     })
     .AddOAuth("GitHub", options =>
     {
@@ -90,6 +113,9 @@ builder.Services
         options.UserInformationEndpoint = "https://api.github.com/user";
         options.SaveTokens = true;
 
+        options.CorrelationCookie.SameSite = SameSiteMode.None;
+        options.CorrelationCookie.SecurePolicy = CookieSecurePolicy.Always;
+
         options.Scope.Add("user:email");
 
         options.ClaimActions.MapJsonKey(ClaimTypes.NameIdentifier, "id");
@@ -100,14 +126,47 @@ builder.Services
         {
             var req = new HttpRequestMessage(HttpMethod.Get, context.Options.UserInformationEndpoint);
             req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", context.AccessToken);
-            req.Headers.Add("User-Agent", "Axpenser");
+            req.Headers.Add("User-Agent", "Axpenser-App");
 
             var res = await context.Backchannel.SendAsync(req);
-            res.EnsureSuccessStatusCode();
+            if (!res.IsSuccessStatusCode)
+            {
+                var error = await res.Content.ReadAsStringAsync();
+                throw new Exception("Failed to fetch GitHub profile.");
+            }
 
             var json = await res.Content.ReadAsStringAsync();
             using var doc = System.Text.Json.JsonDocument.Parse(json);
             context.RunClaimActions(doc.RootElement);
+
+            // Fallback for private emails
+            if (!context.Identity!.HasClaim(c => c.Type == ClaimTypes.Email))
+            {
+                var emailReq = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user/emails");
+                emailReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", context.AccessToken);
+                emailReq.Headers.Add("User-Agent", "Axpenser-App");
+
+                var emailRes = await context.Backchannel.SendAsync(emailReq);
+                if (emailRes.IsSuccessStatusCode)
+                {
+                    var emailsJson = await emailRes.Content.ReadAsStringAsync();
+                    using var emailsDoc = System.Text.Json.JsonDocument.Parse(emailsJson);
+                    var primaryEmail = emailsDoc.RootElement.EnumerateArray()
+                        .FirstOrDefault(e => e.GetProperty("primary").GetBoolean()).GetProperty("email").GetString();
+                    
+                    if (!string.IsNullOrEmpty(primaryEmail))
+                    {
+                        context.Identity.AddClaim(new Claim(ClaimTypes.Email, primaryEmail));
+                    }
+                }
+            }
+        };
+
+        options.Events.OnRemoteFailure = context =>
+        {
+            context.Response.Redirect("/api/auth/external/error?reason=" + System.Net.WebUtility.UrlEncode(context.Failure?.Message ?? "github_remote_failure"));
+            context.HandleResponse();
+            return Task.CompletedTask;
         };
     });
 
@@ -118,26 +177,32 @@ builder.Services.AddCors(opt =>
 {
     opt.AddPolicy("axpenser", policy =>
     {
-        policy.WithOrigins("http://localhost:4200")
+        policy.WithOrigins("http://localhost:4200", "https://localhost:4200")
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
     });
 });
 
+builder.Services.Configure<CookiePolicyOptions>(options =>
+{
+    options.MinimumSameSitePolicy = SameSiteMode.Unspecified;
+    options.Secure = CookieSecurePolicy.Always;
+});
+
 var app = builder.Build();
+
+app.UseHttpsRedirection();
+app.UseRouting();
+app.UseCors("axpenser");
+app.UseCookiePolicy();
+app.UseAuthentication();
+app.UseAuthorization();
 
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
 }
-
-app.UseHttpsRedirection();
-
-app.UseCors("axpenser");
-
-app.UseAuthentication();
-app.UseAuthorization();
 
 app.MapControllers();
 

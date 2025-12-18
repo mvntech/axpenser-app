@@ -24,7 +24,8 @@ namespace Axpenser.Infrastructure.Auth
             new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new(JwtRegisteredClaimNames.Email, user.Email ?? ""),
             new(ClaimTypes.NameIdentifier, user.Id.ToString()),
-            new(ClaimTypes.Name, user.Email ?? "")
+            new(ClaimTypes.Name, user.Email ?? ""),
+            new("name", user.FullName ?? "")
         };
 
             foreach (var r in roles) claims.Add(new Claim(ClaimTypes.Role, r));

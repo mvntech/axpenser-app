@@ -10,8 +10,5 @@ import { TrustedBy } from '../../../components/trusted-by/trusted-by';
   selector: 'app-landing-page',
   imports: [Cta, Features, Hero, HowItWorks, Testimonials, TrustedBy],
   templateUrl: './landing-page.html',
-  styleUrl: './landing-page.css',
 })
-export class LandingPage {
-
-}
+export class LandingPage {}

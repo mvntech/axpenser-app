@@ -28,9 +28,14 @@ public class AuthController : ControllerBase
     [HttpPost("register")]
     public async Task<IActionResult> Register(RegisterRequest req)
     {
-        var user = new AppUser { UserName = req.Email, Email = req.Email };
+        if (string.IsNullOrEmpty(req.Email) || string.IsNullOrEmpty(req.Password))
+            return BadRequest(new { errors = new[] { "Email and Password are required." } });
+
+        var user = new AppUser { UserName = req.Email, Email = req.Email, FullName = req.Name };
         var result = await _users.CreateAsync(user, req.Password);
-        if (!result.Succeeded) return BadRequest(result.Errors);
+        
+        if (!result.Succeeded) 
+            return BadRequest(new { errors = result.Errors.Select(e => e.Description) });
 
         await IssueJwtCookieAsync(user);
         return Ok();
@@ -59,7 +64,7 @@ public class AuthController : ControllerBase
         var user = await _users.FindByIdAsync(id.ToString());
         if (user is null) return Unauthorized();
 
-        return new UserProfileDto(user.Id, user.Email ?? "");
+        return new UserProfileDto(user.Id, user.Email ?? "", user.FullName ?? "");
     }
 
     [HttpPost("logout")]
@@ -72,63 +77,91 @@ public class AuthController : ControllerBase
     // Google / GitHub OAuth
 
     [HttpGet("external/google")]
-    public IActionResult Google([FromQuery] string returnUrl = "http://localhost:4200/")
+    public IActionResult Google([FromQuery] string returnUrl = "https://localhost:4200/")
     {
-        var props = new AuthenticationProperties
-        {
-            RedirectUri = Url.Action(nameof(GoogleCallback), new { returnUrl })
-        };
+        var redirectUrl = Url.Action(nameof(GoogleSuccess), "Auth", new { returnUrl }, Request.Scheme);
+        var props = new AuthenticationProperties { RedirectUri = redirectUrl };
         return Challenge(props, "Google");
     }
 
-    [HttpGet("external/google/callback")]
-    public async Task<IActionResult> GoogleCallback([FromQuery] string returnUrl = "http://localhost:4200/")
+    [HttpGet("external/google/success")]
+    public async Task<IActionResult> GoogleSuccess([FromQuery] string returnUrl = "https://localhost:4200/")
     {
-        var principal = User;
+        var authResult = await HttpContext.AuthenticateAsync(IdentityConstants.ExternalScheme);
+        if (!authResult.Succeeded) 
+        {
+            return Redirect($"{GetSafeReturnUrl(returnUrl)}?oauth=failed&reason=external_auth_failed");
+        }
+
+        var principal = authResult.Principal;
         var email = principal.FindFirstValue(ClaimTypes.Email);
-        if (string.IsNullOrWhiteSpace(email)) return Redirect($"{returnUrl}?oauth=failed");
+        var name = principal.FindFirstValue("name") ?? principal.FindFirstValue(ClaimTypes.Name);
+
+        if (string.IsNullOrWhiteSpace(email)) return Redirect($"{GetSafeReturnUrl(returnUrl)}?oauth=failed");
 
         var user = await _users.FindByEmailAsync(email);
         if (user is null)
         {
-            user = new AppUser { UserName = email, Email = email };
+            user = new AppUser { UserName = email, Email = email, FullName = name };
             var create = await _users.CreateAsync(user);
-            if (!create.Succeeded) return Redirect($"{returnUrl}?oauth=failed");
+            if (!create.Succeeded) 
+            {
+                return Redirect($"{GetSafeReturnUrl(returnUrl)}?oauth=failed");
+            }
         }
 
         await IssueJwtCookieAsync(user);
-        return Redirect(returnUrl);
+        return Redirect(GetSafeReturnUrl(returnUrl));
     }
 
     [HttpGet("external/github")]
-    public IActionResult GitHub([FromQuery] string returnUrl = "http://localhost:4200/")
+    public IActionResult GitHub([FromQuery] string returnUrl = "https://localhost:4200/")
     {
-        var props = new AuthenticationProperties
-        {
-            RedirectUri = Url.Action(nameof(GitHubCallback), new { returnUrl })
-        };
+        var redirectUrl = Url.Action(nameof(GitHubSuccess), "Auth", new { returnUrl }, Request.Scheme);
+        var props = new AuthenticationProperties { RedirectUri = redirectUrl };
         return Challenge(props, "GitHub");
     }
 
-    [HttpGet("external/github/callback")]
-    public async Task<IActionResult> GitHubCallback([FromQuery] string returnUrl = "http://localhost:4200/")
+    [HttpGet("external/github/success")]
+    public async Task<IActionResult> GitHubSuccess([FromQuery] string returnUrl = "https://localhost:4200/")
     {
-        var principal = User;
+        var authResult = await HttpContext.AuthenticateAsync(IdentityConstants.ExternalScheme);
+        if (!authResult.Succeeded)
+        {
+            return Redirect($"{GetSafeReturnUrl(returnUrl)}?oauth=failed&reason=external_auth_failed");
+        }
+
+        var principal = authResult.Principal;
         var email = principal.FindFirstValue(ClaimTypes.Email);
+        var name = principal.FindFirstValue("name") ?? principal.FindFirstValue(ClaimTypes.Name);
 
         if (string.IsNullOrWhiteSpace(email))
-            return Redirect($"{returnUrl}?oauth=email_required");
+            return Redirect($"{GetSafeReturnUrl(returnUrl)}?oauth=email_required");
 
         var user = await _users.FindByEmailAsync(email);
         if (user is null)
         {
-            user = new AppUser { UserName = email, Email = email };
+            user = new AppUser { UserName = email, Email = email, FullName = name };
             var create = await _users.CreateAsync(user);
-            if (!create.Succeeded) return Redirect($"{returnUrl}?oauth=failed");
+            if (!create.Succeeded) return Redirect($"{GetSafeReturnUrl(returnUrl)}?oauth=failed");
         }
 
         await IssueJwtCookieAsync(user);
-        return Redirect(returnUrl);
+        return Redirect(GetSafeReturnUrl(returnUrl));
+    }
+
+    [HttpGet("external/error")]
+    public IActionResult ExternalError([FromQuery] string reason)
+    {
+        return Redirect($"https://localhost:4200/auth/login?oauth=failed&reason={System.Net.WebUtility.UrlEncode(reason)}");
+    }
+
+    private string GetSafeReturnUrl(string returnUrl)
+    {
+        if (string.IsNullOrEmpty(returnUrl) || !returnUrl.StartsWith("/"))
+            return "https://localhost:4200/";
+
+        return "https://localhost:4200" + returnUrl;
     }
 
     private async Task IssueJwtCookieAsync(AppUser user)
