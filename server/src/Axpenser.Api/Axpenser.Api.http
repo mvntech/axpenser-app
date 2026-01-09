@@ -1,0 +1,6 @@
+@Axpenser.Api_HostAddress = http://localhost:5107
+
+GET {{Axpenser.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

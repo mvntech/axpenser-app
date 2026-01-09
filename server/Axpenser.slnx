@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Axpenser.Api/Axpenser.Api.csproj" />
+    <Project Path="src/Axpenser.Application/Axpenser.Application.csproj" />
+    <Project Path="src/Axpenser.Domain/Axpenser.Domain.csproj" />
+    <Project Path="src/Axpenser.Infrastructure/Axpenser.Infrastructure.csproj" />
+  </Folder>
+</Solution>
