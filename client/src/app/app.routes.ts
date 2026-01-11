@@ -1,5 +1,6 @@
 import { Routes } from '@angular/router';
 import { PublicLayout } from './layout/public-layout/public-layout';
+import { AuthLayout } from './layout/auth-layout/auth-layout';
 
 export const routes: Routes = [
   {
@@ -13,4 +14,11 @@ export const routes: Routes = [
       },
     ],
   },
+  {
+    path: '',
+    component: AuthLayout,
+    loadChildren: () =>
+      import('./features/auth/auth.routes').then(m => m.AUTH_ROUTES),
+  },
+  { path: '**', redirectTo: '', pathMatch: 'full' },
 ];
